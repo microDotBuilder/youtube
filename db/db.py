@@ -1,1 +1,0 @@
-## we will move all the logs and the checkpoint file to the db folder

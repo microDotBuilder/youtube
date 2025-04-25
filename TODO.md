@@ -6,9 +6,9 @@
   - [ ] reason of choosing firebase - easy to innitialize and implement in python.
 
   - [x] create firebase project
-  - [ ] implement cloud firesotre
-  - [ ] get all the enviornemnt variables in
-  - [ ] implement a sample db and test file that pushes to databse.
+  - [x] implement cloud firesotre
+  - [x] get all the enviornemnt variables in
+  - [x] implement a fake seed db and test file that pushes to databse.
   - [ ] implement all the real data into firebase
 
 - [ ] push all the code to vm

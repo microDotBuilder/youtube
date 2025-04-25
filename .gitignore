@@ -15,3 +15,5 @@ wheels/
 .env.production.local
 
 
+
+private_key.json

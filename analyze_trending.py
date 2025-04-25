@@ -10,6 +10,7 @@ import isodate
 from collections import defaultdict
 import sys
 import traceback
+from db.firebase_storage import FirebaseStorage
 
 # Set up logging
 logging.basicConfig(
@@ -22,6 +23,9 @@ logging.basicConfig(
 )
 
 load_dotenv()
+
+# Initialize Firebase storage
+firebase_storage = FirebaseStorage()
 
 # YouTube video categories mapping
 YOUTUBE_CATEGORIES = {
@@ -55,23 +59,12 @@ def get_category_name(category_id):
     return YOUTUBE_CATEGORIES.get(str(category_id), f"Unknown Category ({category_id})")
 
 def save_checkpoint(checkpoint_data, checkpoint_file='checkpoint.json'):
-    """Save current progress to checkpoint file."""
-    try:
-        with open(checkpoint_file, 'w') as f:
-            json.dump(checkpoint_data, f)
-        logging.info(f"Checkpoint saved to {checkpoint_file}")
-    except Exception as e:
-        logging.error(f"Error saving checkpoint: {e}")
+    """Save current progress to Firebase."""
+    return firebase_storage.save_checkpoint(checkpoint_data)
 
 def load_checkpoint(checkpoint_file='checkpoint.json'):
-    """Load progress from checkpoint file."""
-    try:
-        if os.path.exists(checkpoint_file):
-            with open(checkpoint_file, 'r') as f:
-                return json.load(f)
-    except Exception as e:
-        logging.error(f"Error loading checkpoint: {e}")
-    return None
+    """Load progress from Firebase."""
+    return firebase_storage.load_checkpoint()
 
 def fetch_trending_videos(total_videos=200, batch_size=50, region="US", delay=10, checkpoint_file='checkpoint.json'):
     """
@@ -231,72 +224,25 @@ def analyze_videos(videos):
         "category_stats": dict(category_stats)
     }
 
-def save_results_to_files(results, base_filename=None, output_dir='results'):
+def save_results_to_firebase(results):
     """
-    Save analysis results to CSV and JSON files.
+    Save analysis results to Firebase.
     
     Args:
         results (dict): Analysis results from analyze_videos()
-        base_filename (str): Base filename for the output files (optional)
     """
     if not results:
         logging.error("No results to save")
         return
-        
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Generate filename with timestamp if not provided
-    if not base_filename:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_filename = f"youtube_analysis_{timestamp}"
     
     try:
-        # Save to JSON
-        json_filename = os.path.join(output_dir, f"{base_filename}.json")
-        with open(json_filename, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        logging.info(f"Saved detailed results to {json_filename}")
-        
-        # Save to CSV
-        csv_filename = os.path.join(output_dir, f"{base_filename}.csv")
-        with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                'Title', 'Channel', 'Category', 'Duration (s)', 
-                'Views', 'Likes', 'Comments', 'Published At', 'URL', 'Type'
-            ])
+        # Save to Firebase
+        result_id = firebase_storage.save_analysis_results(results)
+        if result_id:
+            logging.info(f"Results saved successfully with ID: {result_id}")
+        else:
+            logging.error("Failed to save results to Firebase")
             
-            for video_type, videos in [('Short', results['shorts']), ('Regular', results['regular_videos'])]:
-                for video in videos:
-                    writer.writerow([
-                        video['title'],
-                        video['channel'],
-                        video['categoryName'],
-                        video['duration'],
-                        video['views'],
-                        video['likes'],
-                        video['comments'],
-                        video['publishedAt'],
-                        video['url'],
-                        video_type
-                    ])
-        
-        logging.info(f"Saved summary to {csv_filename}")
-        
-        # Save category stats
-        stats_filename = os.path.join(output_dir, f"{base_filename}_categories.csv")
-        with open(stats_filename, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['Category', 'Count', 'Percentage'])
-            total_videos = len(results['shorts']) + len(results['regular_videos'])
-            for category_id, count in results['category_stats'].items():
-                category_name = get_category_name(category_id)
-                percentage = (count / total_videos) * 100
-                writer.writerow([category_name, count, f"{percentage:.1f}%"])
-        
-        logging.info(f"Saved category statistics to {stats_filename}")
-        
     except Exception as e:
         logging.error(f"Error saving results: {e}")
         logging.error(traceback.format_exc())
@@ -339,8 +285,8 @@ def main():
             # Analyze videos
             results = analyze_videos(videos)
             if results:
-                # Save results to files
-                save_results_to_files(results)
+                # Save results to Firebase
+                save_results_to_firebase(results)
             return results
             
     except Exception as e:
