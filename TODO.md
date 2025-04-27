@@ -9,9 +9,3 @@
   - [x] get all the enviornemnt variables in
   - [x] implement a fake seed db and test file that pushes to databse.
   - [x] implement all the real data into firebase
-
-- [ ] push all the code to vm
-
-- [ ] dockerize the whole project
-- [ ] make sure it runs in docker properly
-- [ ] check if it deployes and runs

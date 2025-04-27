@@ -11,16 +11,60 @@ from collections import defaultdict
 import sys
 import traceback
 from db.firebase_storage import FirebaseStorage
+from colorama import init, Fore, Style
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('youtube_analysis.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Initialize colorama
+init()
+
+# Custom formatter for colored logging
+class ColoredFormatter(logging.Formatter):
+    """Custom formatter that adds colors to different log levels"""
+    
+    def format(self, record):
+        # Add colors based on log level
+        if record.levelno >= logging.ERROR:
+            color = Fore.RED
+        elif record.levelno >= logging.WARNING:
+            color = Fore.YELLOW
+        elif record.levelno >= logging.INFO:
+            color = Fore.GREEN
+        else:
+            color = Fore.WHITE
+            
+        # Add color to the message
+        record.msg = f"{color}{record.msg}{Style.RESET_ALL}"
+        return super().format(record)
+
+# Set up logging with colors
+def setup_logging():
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    
+    # Create formatters
+    colored_formatter = ColoredFormatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # File handler (no colors)
+    file_handler = logging.FileHandler('youtube_analysis.log')
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    
+    # Console handler (with colors)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(colored_formatter)
+    
+    # Add handlers
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+# Initialize logger
+logger = setup_logging()
 
 load_dotenv()
 
@@ -60,6 +104,7 @@ def get_category_name(category_id):
 
 def save_checkpoint(checkpoint_data, checkpoint_file='checkpoint.json'):
     """Save current progress to Firebase."""
+
     return firebase_storage.save_checkpoint(checkpoint_data)
 
 def load_checkpoint(checkpoint_file='checkpoint.json'):
@@ -86,18 +131,21 @@ def fetch_trending_videos(total_videos=200, batch_size=50, region="US", delay=10
     youtube = build("youtube", "v3", developerKey=API_KEY)
     all_items = []
     next_page_token = None
+    request_count = 0  # Counter for API requests
     
     # Load checkpoint if exists
     checkpoint = load_checkpoint(checkpoint_file)
     if checkpoint:
         all_items = checkpoint.get('videos', [])
         next_page_token = checkpoint.get('next_page_token')
-        logging.info(f"Resuming from checkpoint with {len(all_items)} videos")
+        request_count = checkpoint.get('request_count', 0)  # Load request count from checkpoint
+        logging.info(f"Resuming from checkpoint with {len(all_items)} videos and {request_count} previous requests")
 
     try:
         while len(all_items) < total_videos:
             try:
-                logging.info(f"Fetching batch of {batch_size} videos...")
+                request_count += 1  # Increment request counter
+                logging.info(f"Request #{request_count}: Fetching batch of {batch_size} videos... (Current total: {len(all_items)}/{total_videos})")
                 request = youtube.videos().list(
                     part="snippet,statistics,contentDetails",
                     chart="mostPopular",
@@ -110,35 +158,47 @@ def fetch_trending_videos(total_videos=200, batch_size=50, region="US", delay=10
                 items = response.get("items", [])
                 all_items.extend(items)
                 
-                logging.info(f"Fetched {len(items)} videos. Total: {len(all_items)}")
+                logging.info(f"Request #{request_count}: Fetched {len(items)} videos. Total: {len(all_items)}/{total_videos}")
                 
                 next_page_token = response.get("nextPageToken")
                 
-                # Save checkpoint
+                # Save checkpoint with request count
                 checkpoint_data = {
                     'videos': all_items,
                     'next_page_token': next_page_token,
-                    'timestamp': datetime.now().isoformat()
+                    'timestamp': datetime.now().isoformat(),
+                    'request_count': request_count
                 }
                 save_checkpoint(checkpoint_data, checkpoint_file)
                 
-                if not next_page_token or len(all_items) >= total_videos:
+                if not next_page_token:
+                    logging.warning("No more pages available from YouTube API")
+                    break
+                    
+                if len(all_items) >= total_videos:
+                    logging.info(f"Reached target of {total_videos} videos")
                     break
                     
                 logging.info(f"Waiting {delay} seconds before next request...")
                 time.sleep(delay)
                 
             except Exception as e:
-                logging.error(f"Error in batch request: {e}")
+                if "quotaExceeded" in str(e):
+                    logging.error(f"YouTube API quota exceeded after {request_count} requests. Please try again later.")
+                    break
+                logging.error(f"Error in batch request #{request_count}: {e}")
                 logging.error(traceback.format_exc())
                 # Wait longer on error
                 time.sleep(delay * 2)
                 continue
         
+        if len(all_items) < total_videos:
+            logging.warning(f"Could only fetch {len(all_items)} videos out of {total_videos} requested after {request_count} requests")
+        
         return all_items[:total_videos]
         
     except Exception as e:
-        logging.error(f"Fatal error in fetch_trending_videos: {e}")
+        logging.error(f"Fatal error in fetch_trending_videos after {request_count} requests: {e}")
         logging.error(traceback.format_exc())
         return all_items
 
@@ -153,7 +213,7 @@ def analyze_videos(videos):
         dict: Analysis results including shorts, regular videos, and category stats
     """
     if not videos:
-        print("No videos to analyze")
+        logging.error("No videos to analyze")
         return None
         
     # 1. ANALYZE VIDEOS
@@ -265,10 +325,10 @@ def cleanup():
 
 def main():
     try:
-        total_videos = 200  # Large number for continuous collection
+        total_videos = 100000  # Large number for continuous collection
         batch_size = 50
         region = "US"
-        delay = 5  # Longer delay for VM
+        delay = 1  # Longer delay for VM
         
         logging.info("Starting YouTube trending videos analysis")
         logging.info(f"Configuration: total_videos={total_videos}, batch_size={batch_size}, region={region}, delay={delay}")
